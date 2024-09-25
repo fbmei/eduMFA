@@ -39,7 +39,7 @@ import functools
 from .UserIdResolver import UserIdResolver
 
 import ldap3
-from ldap3 import MODIFY_REPLACE, MODIFY_ADD, MODIFY_DELETE
+from ldap3 import MODIFY_REPLACE, MODIFY_ADD, MODIFY_DELETE, SUBTREE, DEREF_ALWAYS
 from ldap3 import Tls
 from ldap3.core.exceptions import LDAPOperationResult
 from ldap3.core.results import RESULT_SIZE_LIMIT_EXCEEDED
@@ -165,6 +165,37 @@ def get_info_configuration(noschemas):
     log.debug("Get LDAP schema info: {0!r}".format(get_schema_info))
     return get_schema_info
 
+def safer_paged_search(connection, search_base, search_filter, paged_size, search_scope=SUBTREE, dereference_aliases=DEREF_ALWAYS,
+                        attributes=None, size_limit=0, time_limit=0, types_only=False, get_operational_attributes=False,
+                        controls=None, paged_criticality=False, auto_escape=None):
+    """
+    Wrapper for ``search``, which keeps track of the amount of retrieved entries and stops the
+    search if the size limit is reached to compensate for servers with badly implemented rfc2696.
+    """
+    paged_cookie = None
+    response_amount = 0
+    while True:
+        connection.search(search_base=search_base,
+                      search_filter=search_filter,
+                      search_scope=search_scope,
+                      dereference_aliases=dereference_aliases,
+                      attributes=attributes,
+                      size_limit=size_limit,
+                      time_limit=time_limit,
+                      types_only=types_only,
+                      get_operational_attributes=get_operational_attributes,
+                      controls=controls,
+                      paged_size=paged_size,
+                      paged_criticality=paged_criticality,
+                      auto_escape=auto_escape,
+                      paged_cookie=paged_cookie)
+        for entry in connection.response:
+            yield entry
+        paged_cookie = connection.result.get('controls', {}).get('1.2.840.113556.1.4.319', {}).get('value', {}).get('cookie', None)
+        response_amount += len(connection.response)
+
+        if not paged_cookie or (size_limit > 0 and response_amount >= size_limit):
+            break
 
 def ignore_sizelimit_exception(conn, generator):
     """
@@ -717,13 +748,13 @@ class IdResolver (UserIdResolver):
                                                  searchDict[search_key])
         filter += ")"
 
-        g = self.l.extend.standard.paged_search(search_base=self.basedn,
-                                                search_filter=filter,
-                                                search_scope=self.scope,
-                                                attributes=attributes,
-                                                paged_size=100,
-                                                size_limit=self.sizelimit,
-                                                generator=True)
+        g = safer_paged_search(connection=self.l,
+                              search_base=self.basedn,
+                              search_filter=filter,
+                              search_scope=self.scope,
+                              attributes=attributes,
+                              paged_size=100,
+                              size_limit=self.sizelimit)
         # returns a generator of dictionaries
         for entry in ignore_sizelimit_exception(self.l, g):
             # Simple fix for ignored sizelimit with Active Directory
@@ -1083,14 +1114,14 @@ class IdResolver (UserIdResolver):
             if uidtype.lower() != "dn":
                 attributes.append(str(uidtype))
             # search for users...
-            g = l.extend.standard.paged_search(
+            g = safer_paged_search(
+                connection=l,
                 search_base=param["LDAPBASE"],
                 search_filter="(&" + param["LDAPSEARCHFILTER"] + ")",
                 search_scope=param.get("SCOPE") or ldap3.SUBTREE,
                 attributes=attributes,
                 paged_size=100,
-                size_limit=size_limit,
-                generator=True)
+                size_limit=size_limit)
             # returns a generator of dictionaries
             count = 0
             uidtype_count = 0
