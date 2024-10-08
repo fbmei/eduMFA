@@ -174,6 +174,10 @@ def safer_paged_search(connection, search_base, search_filter, paged_size, searc
     """
     paged_cookie = None
     response_amount = 0
+    default_auto_referrals = connection.auto_referrals
+    connection.auto_referrals = False
+    old_connection = None
+    cookie = True
     while True:
         connection.search(search_base=search_base,
                       search_filter=search_filter,
@@ -189,11 +193,25 @@ def safer_paged_search(connection, search_base, search_filter, paged_size, searc
                       paged_criticality=paged_criticality,
                       auto_escape=auto_escape,
                       paged_cookie=paged_cookie)
-        for entry in connection.response:
-            yield entry
+        
+        if not connection.strategy.sync:
+            response, result = connection.get_response(connection.result)
+        else:
+            if connection.strategy.thread_safe:
+                _, result, response, _ = connection.result
+            else:
+                response = connection.response
+                result = connection.result
+        for entry in response:
+            yield entry        
+        if result and result['result'] not in DO_NOT_RAISE_EXCEPTIONS and connection.raise_exceptions:
+            raise LDAPOperationResult(result=result['result'], description=result['description'], dn=result['dn'], message=result['message'], response_type=result['type'])
         paged_cookie = connection.result.get('controls', {}).get('1.2.840.113556.1.4.319', {}).get('value', {}).get('cookie', None)
-        response_amount += len(connection.response)
-
+        response_amount += len(response)
+        if result['referrals'] and default_auto_referrals:
+            if not old_connection:
+                old_connection = connection
+            _, connection, cachekey = connection.strategy.create_referral_connection(result['referrals'])
         if not paged_cookie or (size_limit > 0 and response_amount >= size_limit):
             break
 
