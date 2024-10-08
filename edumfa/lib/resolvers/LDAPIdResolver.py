@@ -42,7 +42,7 @@ import ldap3
 from ldap3 import MODIFY_REPLACE, MODIFY_ADD, MODIFY_DELETE, SUBTREE, DEREF_ALWAYS
 from ldap3 import Tls
 from ldap3.core.exceptions import LDAPOperationResult
-from ldap3.core.results import RESULT_SIZE_LIMIT_EXCEEDED
+from ldap3.core.results import RESULT_SIZE_LIMIT_EXCEEDED, DO_NOT_RAISE_EXCEPTIONS
 import ssl
 
 import os.path
